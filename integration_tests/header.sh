@@ -14,6 +14,21 @@ function finish {
 }
 trap finish EXIT
 
+function assert_run_outcome_is {
+  RUN_OUT_FILEPATH="$1"
+  EXPECTED_OUTCOME="$2"
+
+  RUN_ID=$(awk '/run is queued with ID/ { print $10 }' "${RUN_OUT_FILEPATH}")
+  echo "checking run ${RUN_ID}"
+
+  OUTCOME=$(testground status -t "${RUN_ID}" | awk '/Outcome:/{ print $2 }')
+  echo "found outcome ${OUTCOME}"
+
+  if [ "${OUTCOME}" != "${EXPECTED_OUTCOME}" ]; then
+      exit 1;
+  fi
+}
+
 function assert_run_output_is_correct {
   RUN_OUT_FILEPATH="$1"
 
