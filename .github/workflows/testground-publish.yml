@@ -5,6 +5,9 @@ name: Testground Publish
 #   push:
 #     branches:
 #       - 'main'
+# on:
+#   release:
+#     types: [created]
 
 jobs:
   docker:
@@ -33,3 +36,22 @@ jobs:
           tags: lsenta/testground:sidecar-latest
           file: ./Dockerfile.sidecar
           platforms: linux/arm64,linux/amd64
+  releases-binary:
+    name: Release Go Binary
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v2
+      - uses: wangyoucao577/go-release-action@v1.29
+        with:
+          release_tag: latest # remove me when we move this to "release: [created]".
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          goos: ${{ matrix.goos }}
+          goarch: ${{ matrix.goarch }}
+          project_path: "."
+          binary_name: "testground"
+          ldflags: "-s -w -X github.com/testground/testground/pkg/version.GitCommit=${TG_VERSION}"
+          extra_files: LICENSE-APACHE LICENSE-MIT README.md
