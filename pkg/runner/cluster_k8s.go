@@ -253,9 +253,9 @@ func (c *ClusterK8sRunner) Run(ctx context.Context, input *api.RunInput, ow *rpc
 
 	if !enoughResources {
 		if cfg.AutoscalerEnabled {
-			ow.Warnw("too many test instances requested, will have to wait for cluster autoscaler to kick in.")
+			ow.Warnw("too many test instances requested, will have to wait for cluster autoscaler to kick in")
 		} else {
-			runerr = errors.New("too many test instances requested, resize cluster if you need more capacity.")
+			runerr = errors.New("too many test instances requested, resize cluster if you need more capacity")
 			return
 		}
 	}
@@ -743,7 +743,7 @@ func (c *ClusterK8sRunner) watchRunPods(ctx context.Context, ow *rpc.OutputWrite
 		}
 
 		if time.Since(start) > runTimeout {
-			return fmt.Errorf("run timeout reached. make sure your plan execution completes within %s.", runTimeout)
+			return fmt.Errorf("run timeout reached. make sure your plan execution completes within %s", runTimeout)
 		}
 		time.Sleep(2000 * time.Millisecond)
 
