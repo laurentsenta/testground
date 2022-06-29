@@ -1,0 +1,40 @@
+on: [push, pull_request]
+name: Testground Integration Test
+
+jobs:
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ "ubuntu" ] # , "windows" , "macos" ] # docker not available on macos
+        go: [ "1.18.x" ]
+        suite: [ "test-integ-cluster-k8s", "test-integ-local-exec", "test-integ-local-docker" ]
+    env:
+      COVERAGES: ""
+    runs-on: ${{ format('{0}-latest', matrix.os) }}
+    name: ${{matrix.suite}} on ${{ matrix.os }} (go ${{ matrix.go }})
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v2
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Go information
+        run: |
+          go version
+          go env
+      - name: Use msys2 on windows
+        if: ${{ matrix.os == 'windows' }}
+        shell: bash
+        # The executable for msys2 is also called bash.cmd
+        #   https://github.com/actions/virtual-environments/blob/main/images/win/Windows2019-Readme.md#shells
+        # If we prepend its location to the PATH
+        #   subsequent 'shell: bash' steps will use msys2 instead of gitbash
+        run: echo "C:/msys64/usr/bin" >> $GITHUB_PATH
+      - name: Run repo-specific setup
+        uses: ./.github/actions/go-test-setup
+        if: hashFiles('./.github/actions/go-test-setup') != ''
+      - name: Run tests
+        shell: bash
+        run: make ${{ matrix.suite }}
