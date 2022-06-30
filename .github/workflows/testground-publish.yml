@@ -1,5 +1,7 @@
-on: [push, pull_request]
 name: Testground Publish
+on:
+  release:
+    types: [created]
 
 # on:
 #   push:
@@ -26,14 +28,14 @@ jobs:
         uses: docker/build-push-action@v3
         with:
           push: true
-          tags: lsenta/testground:latest
+          tags: lsenta/testground:${{ github.event.release.tag_name }}
           file: ./Dockerfile.testground
           platforms: linux/arm64,linux/amd64
       - name: Build and push
         uses: docker/build-push-action@v3
         with:
           push: true
-          tags: lsenta/testground:sidecar-latest
+          tags: lsenta/testground:sidecar-${{ github.event.release.tag_name }}
           file: ./Dockerfile.sidecar
           platforms: linux/arm64,linux/amd64
   releases-binary:
