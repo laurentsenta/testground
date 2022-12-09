@@ -1,0 +1,47 @@
+on:
+  - push
+  - pull_request
+name: Flakiness Test
+
+concurrency:
+  group: ${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  issue-1488-latency:
+    name: "Issue 1488 - rtt flakiness check"
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v3
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Install Testground
+        # Required to get the sync-service and other docker containers used by the daemon.
+        run: |
+          make install
+      - name: Run Testground
+        run: |
+          testground daemon 2>&1 1>/tmp/testground.out &
+      - name: Test issue 1488
+        run: |
+          n=10
+
+          for ((i=1; i<=n; i++)); do
+            mkdir -p /tmp/test-runs/
+
+            testground run single \
+                  --plan testground/_integrations \
+                  --testcase issue-1488-latency-not-working-correctly \
+                  --builder docker:go \
+                  --runner local:docker \
+                  --instances 2 \
+                  --wait 2>&1 | tee /tmp/test-runs/test-${i}.out
+      - uses: actions/upload-artifact@v3
+        if: ${{ always() }}
+        with:
+          name: testground-output
+          path: |
+            /tmp/test-runs/
+            /tmp/testground.*
