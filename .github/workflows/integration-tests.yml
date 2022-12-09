@@ -1,8 +1,6 @@
 on:
-  push:
-    branches:
-      - master
-  pull_request
+  - push
+  - pull_request
 name: Integration Tests
 
 concurrency:
