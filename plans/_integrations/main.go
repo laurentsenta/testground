@@ -48,6 +48,7 @@ func optionalFailure(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	latency := 25 * time.Millisecond
+	errorRTTThreshold := 10 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
@@ -55,20 +56,6 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 	client := initCtx.SyncClient
 	netclient := initCtx.NetClient
-
-	// Configure the network
-	config := &network.Config{
-		Network: "default",
-		Enable:  true,
-		Default: network.LinkShape{
-			Latency:   latency,
-		},
-		CallbackState: sync.State("network-configured"),
-		CallbackTarget: runenv.TestInstanceCount,
-		// RoutingPolicy: network.DenyAll,
-	}
-
-	netclient.MustConfigureNetwork(ctx, config)
 
 	// Find my IP address
 	myIp, err := netclient.GetDataNetworkIP()
@@ -97,6 +84,17 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	serverReadyState := sync.State("server-ready")
 	clientDoneState := sync.State("client-done")
 
+	// Configure the network
+	config := &network.Config{
+		Network: "default",
+		Enable:  true,
+		Default: network.LinkShape{
+			Latency:   latency,
+		},
+		CallbackState: sync.State("network-configured"),
+		CallbackTarget: runenv.TestInstanceCount,
+	}
+
 	if seq == 1 {
 		// Setting up the server
 		listener, err := net.ListenTCP("tcp4", &net.TCPAddr{Port: 1234})
@@ -104,11 +102,12 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 			return err
 		}
 		defer listener.Close()
-
 		go server(runenv, listener)
 
 		runenv.RecordMessage("server is ready")
 		client.MustSignalAndWait(ctx, serverReadyState, runenv.TestInstanceCount)
+		netclient.MustConfigureNetwork(ctx, config)
+
 		runenv.RecordMessage("waiting for clients to be done")
 		client.MustSignalAndWait(ctx, clientDoneState, runenv.TestInstanceCount)
 		return nil
@@ -118,6 +117,7 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 		runenv.RecordMessage("waiting for server to be ready")
 		client.MustSignalAndWait(ctx, serverReadyState, runenv.TestInstanceCount)
+		netclient.MustConfigureNetwork(ctx, config)
 
 		// Connect to the server
 		runenv.RecordMessage("Attempting to connect to %s", serverIp)
@@ -131,10 +131,10 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		defer conn.Close()
 
 		// disable Nagle's algorithm to measure latency.
-		err = conn.SetNoDelay(true)
-		if err != nil {
-			return err
-		}
+		// err = conn.SetNoDelay(true)
+		// if err != nil {
+		// 	return err
+		// }
 
 		buf := make([]byte, 1)
 		deltas := make([]time.Duration, 0, 3)
@@ -166,11 +166,11 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 		client.MustSignalAndWait(ctx, clientDoneState, runenv.TestInstanceCount)
 
-		if max > 25 * 2 * 1.1 * time.Millisecond {
-			return fmt.Errorf("max RTT is invalid: %v", max)
+		if max > latency * 2 + errorRTTThreshold {
+			return fmt.Errorf("max RTT is invalid: %v instead of %v", max, latency * 2)
 		}
-		if min < 25 * 2 * 0.90 * time.Millisecond {
-			return fmt.Errorf("min RTT is invalid: %v", min)
+		if min < latency * 2 - errorRTTThreshold {
+			return fmt.Errorf("min RTT is invalid: %v instead of %v", min, latency * 2)
 		}
 	}
 	return nil
@@ -179,10 +179,10 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 func handleConnection(conn *net.TCPConn) {
 	defer conn.Close()
 	// disable Nagle's algorithm to measure latency.
-	err := conn.SetNoDelay(true)
-	if err != nil {
-		panic(err)
-	}
+	// err := conn.SetNoDelay(true)
+	// if err != nil {
+	// 	panic(err)
+	// }
 
 	buf := make([]byte, 1)
 	for {
