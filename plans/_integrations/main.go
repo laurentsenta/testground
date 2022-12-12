@@ -96,35 +96,10 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	client.MustSignalAndWait(ctx, clientReadyState, runenv.TestInstanceCount)
 
 	// Connect to the other peers and keep the conn in a map
-	conns := make(map[string]net.Conn)
-	defer func() {
-		for _, conn := range conns {
-			conn.Close()
-		}
-	}()
-
-	for _, peer := range peers {
-		if peer.Equal(myIp) {
-			continue
-		}
-
-		runenv.RecordMessage("Attempting to connect to %s", peer)
-		conn, err := net.DialTCP("tcp4", nil, &net.TCPAddr{
-			IP:   peer,
-			Port: 1234,
-		})
-
-		if err != nil {
-			return err
-		}
-
-		// disable Nagle's algorithm to measure latency.
-		err = conn.SetNoDelay(true)
-		if err != nil {
-			return err
-		}
-
-		conns[peer.String()] = conn
+	conns, err := prepareConns(runenv, peers, myIp)
+	defer clearConns(conns)
+	if err != nil {
+		return err
 	}
 
 	// Configure the network
@@ -136,7 +111,9 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	}
 
 	for _, latency := range latencies {
-		runenv.RecordMessage("RTT: %s", latency*2)
+		expectedRTT := latency * 2
+
+		runenv.RecordMessage("RTT: %s", expectedRTT)
 
 		config := &network.Config{
 			Network: "default",
@@ -151,11 +128,8 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		// Wait for the network to be configured
 		netclient.MustConfigureNetwork(ctx, config)
 
-
-		expectedRTT := latency * 2
-
 		// ping pong with the peers
-		err = pingPeers(ctx, runenv, conns, expectedRTT - expectedRTT / 5, expectedRTT + expectedRTT / 5)
+		err = pingPeers(ctx, runenv, conns, expectedRTT-expectedRTT/5, expectedRTT+expectedRTT/5)
 		if err != nil {
 			return err
 		}
@@ -165,6 +139,42 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	}
 
 	return nil
+}
+
+func prepareConns(runenv *runtime.RunEnv, peers []net.IP, myIp net.IP) (map[string]net.Conn, error) {
+	conns := make(map[string]net.Conn)
+
+	for _, peer := range peers {
+		if peer.Equal(myIp) {
+			continue
+		}
+
+		runenv.RecordMessage("Attempting to connect to %s", peer)
+		conn, err := net.DialTCP("tcp4", nil, &net.TCPAddr{
+			IP:   peer,
+			Port: 1234,
+		})
+
+		if err != nil {
+			return nil, err
+		}
+
+		// disable Nagle's algorithm to measure latency.
+		err = conn.SetNoDelay(true)
+		if err != nil {
+			return nil, err
+		}
+
+		conns[peer.String()] = conn
+	}
+
+	return conns, nil
+}
+
+func clearConns(conns map[string]net.Conn) {
+	for _, conn := range conns {
+		conn.Close()
+	}
 }
 
 func pingPeers(ctx context.Context, runenv *runtime.RunEnv, conns map[string]net.Conn, minRTT time.Duration, maxRTT time.Duration) error {
