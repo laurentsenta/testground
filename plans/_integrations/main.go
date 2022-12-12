@@ -12,6 +12,7 @@ import (
 	"github.com/testground/sdk-go/run"
 	"github.com/testground/sdk-go/runtime"
 	"github.com/testground/sdk-go/sync"
+	"golang.org/x/sync/errgroup"
 )
 
 var testcases = map[string]interface{}{
@@ -47,15 +48,14 @@ func optionalFailure(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 }
 
 func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
-	latency := 25 * time.Millisecond
-	errorRTTThreshold := 10 * time.Millisecond
-
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
-
 	client := initCtx.SyncClient
 	netclient := initCtx.NetClient
+
+	// Wait until all instances in this test run have signalled.
+	initCtx.MustWaitAllInstancesInitialized(ctx)
 
 	// Find my IP address
 	myIp, err := netclient.GetDataNetworkIP()
@@ -63,9 +63,17 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		return err
 	}
 
+	// Start a server
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{Port: 1234})
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	go server(runenv, listener)
+
 	// Exhange IPs with the other instances
 	peersTopic := sync.NewTopic("peers", new(net.IP))
-	seq := client.MustPublish(ctx, peersTopic, myIp)
+	_ = client.MustPublish(ctx, peersTopic, myIp)
 
 	peersCh := make(chan net.IP)
 	peers := make([]net.IP, 0, runenv.TestInstanceCount)
@@ -81,108 +89,150 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		}
 	}
 
-	serverReadyState := sync.State("server-ready")
+	clientReadyState := sync.State("client-ready")
 	clientDoneState := sync.State("client-done")
 
-	// Configure the network
-	config := &network.Config{
-		Network: "default",
-		Enable:  true,
-		Default: network.LinkShape{
-			Latency:   latency,
-		},
-		CallbackState: sync.State("network-configured"),
-		CallbackTarget: runenv.TestInstanceCount,
-	}
+	// Setting up the client
+	client.MustSignalAndWait(ctx, clientReadyState, runenv.TestInstanceCount)
 
-	if seq == 1 {
-		// Setting up the server
-		listener, err := net.ListenTCP("tcp4", &net.TCPAddr{Port: 1234})
-		if err != nil {
-			return err
+	// Connect to the other peers and keep the conn in a map
+	conns := make(map[string]net.Conn)
+	defer func() {
+		for _, conn := range conns {
+			conn.Close()
 		}
-		defer listener.Close()
-		go server(runenv, listener)
+	}()
 
-		runenv.RecordMessage("server is ready")
-		client.MustSignalAndWait(ctx, serverReadyState, runenv.TestInstanceCount)
-		netclient.MustConfigureNetwork(ctx, config)
+	for _, peer := range peers {
+		if peer.Equal(myIp) {
+			continue
+		}
 
-		runenv.RecordMessage("waiting for clients to be done")
-		client.MustSignalAndWait(ctx, clientDoneState, runenv.TestInstanceCount)
-		return nil
-	} else {
-		// Setting up the client
-		serverIp := peers[0]
-
-		runenv.RecordMessage("waiting for server to be ready")
-		client.MustSignalAndWait(ctx, serverReadyState, runenv.TestInstanceCount)
-		netclient.MustConfigureNetwork(ctx, config)
-
-		// Connect to the server
-		runenv.RecordMessage("Attempting to connect to %s", serverIp)
+		runenv.RecordMessage("Attempting to connect to %s", peer)
 		conn, err := net.DialTCP("tcp4", nil, &net.TCPAddr{
-			IP:   serverIp,
+			IP:   peer,
 			Port: 1234,
 		})
+
 		if err != nil {
 			return err
 		}
-		defer conn.Close()
 
 		// disable Nagle's algorithm to measure latency.
-		// err = conn.SetNoDelay(true)
-		// if err != nil {
-		// 	return err
-		// }
+		err = conn.SetNoDelay(true)
+		if err != nil {
+			return err
+		}
 
-		buf := make([]byte, 1)
-		deltas := make([]time.Duration, 0, 3)
+		conns[peer.String()] = conn
+	}
 
-		// Send 3 ping to the server
-		for i := 0; i < 10; i++ {
-			start := time.Now()
+	// Configure the network
+	latencies := []time.Duration{
+		25 * time.Millisecond,
+		50 * time.Millisecond,
+		100 * time.Millisecond,
+		200 * time.Millisecond,
+	}
 
-			// Send the ping
-			conn.Write([]byte{byte(i)})
+	for _, latency := range latencies {
+		runenv.RecordMessage("RTT: %s", latency*2)
 
-			// Receive the pong
-			_, err := conn.Read(buf)
+		config := &network.Config{
+			Network: "default",
+			Enable:  true,
+			Default: network.LinkShape{
+				Latency: latency,
+			},
+			CallbackState:  sync.State("network-configured"),
+			CallbackTarget: runenv.TestInstanceCount,
+		}
+
+		// Wait for the network to be configured
+		netclient.MustConfigureNetwork(ctx, config)
+
+
+		expectedRTT := latency * 2
+
+		// ping pong with the peers
+		err = pingPeers(ctx, runenv, conns, expectedRTT - expectedRTT / 5, expectedRTT + expectedRTT / 5)
+		if err != nil {
+			return err
+		}
+
+		// Done with that run (will iterate later)
+		client.MustSignalAndWait(ctx, clientDoneState, runenv.TestInstanceCount)
+	}
+
+	return nil
+}
+
+func pingPeers(ctx context.Context, runenv *runtime.RunEnv, conns map[string]net.Conn, minRTT time.Duration, maxRTT time.Duration) error {
+	g, _ := errgroup.WithContext(ctx)
+
+	for _, conn := range conns {
+		conn := conn
+
+		g.Go(func() error {
+			deltas, err := pingPeer(conn)
 			if err != nil {
 				return err
 			}
 
-			end := time.Now()
-
-			// append to the array of deltas
-			deltas = append(deltas, end.Sub(start))
-		}
-
-		// Record rtts:
-		runenv.RecordMessage("RTTs: %v", deltas)
-		// Record min, max, avg RTTs
-		min, max, avg := Summarize(deltas)
-		runenv.RecordMessage("min: %v, max: %v, avg: %v", min, max, avg)
-
-		client.MustSignalAndWait(ctx, clientDoneState, runenv.TestInstanceCount)
-
-		if max > latency * 2 + errorRTTThreshold {
-			return fmt.Errorf("max RTT is invalid: %v instead of %v", max, latency * 2)
-		}
-		if min < latency * 2 - errorRTTThreshold {
-			return fmt.Errorf("min RTT is invalid: %v instead of %v", min, latency * 2)
-		}
+			return verifyLatency(runenv, deltas, minRTT, maxRTT)
+		})
 	}
+
+	return g.Wait()
+}
+
+func pingPeer(conn net.Conn) ([]time.Duration, error) {
+	buf := make([]byte, 1)
+	deltas := make([]time.Duration, 0, 3)
+
+	// Send N pings
+	for i := 0; i < 4; i++ {
+		start := time.Now()
+
+		// Send the ping
+		conn.Write([]byte{byte(i)})
+
+		// Receive the pong
+		_, err := conn.Read(buf)
+		if err != nil {
+			return nil, err
+		}
+
+		end := time.Now()
+
+		// append to the array of deltas
+		deltas = append(deltas, end.Sub(start))
+	}
+
+	return deltas, nil
+}
+
+func verifyLatency(runenv *runtime.RunEnv, deltas []time.Duration, minRTT time.Duration, maxRTT time.Duration) error {
+	min, max, avg := Summarize(deltas)
+	runenv.RecordMessage("RTT %v - min: %v, max: %v, avg: %v", deltas, min, max, avg)
+
+	if max > maxRTT {
+		return fmt.Errorf("max RTT is invalid: %v > %v", max, maxRTT)
+	}
+	if min < minRTT {
+		return fmt.Errorf("min RTT is invalid: %v < %v", min, minRTT)
+	}
+
 	return nil
 }
 
 func handleConnection(conn *net.TCPConn) {
 	defer conn.Close()
 	// disable Nagle's algorithm to measure latency.
-	// err := conn.SetNoDelay(true)
-	// if err != nil {
-	// 	panic(err)
-	// }
+	err := conn.SetNoDelay(true)
+	if err != nil {
+		panic(err)
+	}
 
 	buf := make([]byte, 1)
 	for {
