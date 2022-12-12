@@ -104,10 +104,11 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 	// Configure the network
 	latencies := []time.Duration{
-		25 * time.Millisecond,
-		50 * time.Millisecond,
-		100 * time.Millisecond,
 		200 * time.Millisecond,
+		25 * time.Millisecond,
+		// 50 * time.Millisecond,
+		// 100 * time.Millisecond,
+		// 200 * time.Millisecond,
 	}
 
 	for _, latency := range latencies {
@@ -125,8 +126,13 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 			CallbackTarget: runenv.TestInstanceCount,
 		}
 
+		// conns, err := prepareConns(runenv, peers, myIp)
+
 		// Wait for the network to be configured
 		netclient.MustConfigureNetwork(ctx, config)
+
+		// conns, err := prepareConns(runenv, peers, myIp)
+		time.Sleep(500 * time.Millisecond)
 
 		// ping pong with the peers
 		err = pingPeers(ctx, runenv, conns, expectedRTT-expectedRTT/5, expectedRTT+expectedRTT/5)
@@ -136,6 +142,7 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 		// Done with that run (will iterate later)
 		client.MustSignalAndWait(ctx, clientDoneState, runenv.TestInstanceCount)
+		// clearConns(conns)
 	}
 
 	return nil
@@ -150,6 +157,11 @@ func prepareConns(runenv *runtime.RunEnv, peers []net.IP, myIp net.IP) (map[stri
 		}
 
 		runenv.RecordMessage("Attempting to connect to %s", peer)
+		// conn, err := net.DialUDP("udp", nil, &net.UDPAddr{
+		// 	IP:   peer,
+		// 	Port: 1234,
+		// })
+
 		conn, err := net.DialTCP("tcp4", nil, &net.TCPAddr{
 			IP:   peer,
 			Port: 1234,
