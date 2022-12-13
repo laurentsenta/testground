@@ -99,11 +99,11 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 	// Configure the network
 	latencies := []time.Duration{
+		// 25 * time.Millisecond,
 		200 * time.Millisecond,
-		25 * time.Millisecond,
 		// 50 * time.Millisecond,
 		// 100 * time.Millisecond,
-		200 * time.Millisecond,
+		// 200 * time.Millisecond,
 	}
 
 	iteration := 0
@@ -132,7 +132,7 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 		// Wait for the network to be configured
 		netclient.MustConfigureNetwork(ctx, config)
-		runenv.RecordMessage("Configuration complete, moving on with ping")
+		// runenv.RecordMessage("Configuration complete, moving on with ping")
 
 		// conns, err := prepareConns(runenv, peers, myIp)
 		// time.Sleep(500 * time.Millisecond)

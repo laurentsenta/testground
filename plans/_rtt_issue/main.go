@@ -33,7 +33,9 @@ func main() {
 }
 
 func runPing(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
-	runenv.RecordMessage("started test instance")
+	runenv.RecordMessage("started test instance, waiting for a minute...")
+	// time.Sleep(1 * time.Minute)
+	
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -143,7 +145,6 @@ func runPing(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 	// Wait for all peers to signal that they're done with the connection phase.
 	initCtx.SyncClient.MustSignalAndWait(ctx, "connected", runenv.TestInstanceCount)
-	time.Sleep(1 * time.Second)
 
 	// 📡  Let's ping all our peers without any traffic shaping rules.
 	if err := pingPeers(-1,"initial"); err != nil {
@@ -152,6 +153,7 @@ func runPing(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 	// 🕐  Wait for all peers to have finished the initial round.
 	initCtx.SyncClient.MustSignalAndWait(ctx, "initial", runenv.TestInstanceCount)
+	time.Sleep(1 * time.Second)
 
 	latencies := []time.Duration{
 		200 * time.Millisecond,
