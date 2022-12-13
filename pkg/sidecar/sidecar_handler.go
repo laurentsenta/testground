@@ -67,12 +67,14 @@ func handler(ctx context.Context, instance *Instance) error {
 				return nil
 			}
 
-			instance.S().Infow("applying network change", "network", cfg)
+			instance.S().Infow("applying network change", "instance", instance.Hostname, "network", cfg)
 			if err := instance.Network.ConfigureNetwork(ctx, cfg); err != nil {
 				return fmt.Errorf("failed to update network %s: %w", cfg.Network, err)
 			}
 
 			if cfg.CallbackState != "" {
+				// time.Sleep(1 * time.Second)
+				instance.S().Infow("signaling completion of network change", "instance", instance.Hostname, "network", cfg)
 				_, err := instance.Client.SignalEntry(ctx, cfg.CallbackState)
 				if err != nil {
 					return fmt.Errorf("failed to signal network state change %s: %w", cfg.CallbackState, err)

@@ -130,7 +130,7 @@ func (l *NetlinkLink) setHtb(idx uint16, attrs netlink.HtbClassAttrs) error {
 // Sets link's Netem queuing disciplines attributes. See tc-netem(8).
 func (l *NetlinkLink) setNetem(idx uint16, attrs netlink.NetemQdiscAttrs) error {
 	htbHandle, netemHandle := handlesForIndex(idx)
-	return l.handle.QdiscChange(netlink.NewNetem(
+	err := l.handle.QdiscChange(netlink.NewNetem(
 		netlink.QdiscAttrs{
 			LinkIndex: l.Attrs().Index,
 			Parent:    htbHandle,
@@ -138,6 +138,9 @@ func (l *NetlinkLink) setNetem(idx uint16, attrs netlink.NetemQdiscAttrs) error 
 		},
 		attrs,
 	))
+	fmt.Printf("set netem: %v DONE", attrs)
+	// time.Sleep(500 * time.Millisecond)
+	return err
 }
 
 func toMicroseconds(t time.Duration) uint32 {

@@ -54,16 +54,10 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	client := initCtx.SyncClient
 	netclient := initCtx.NetClient
 
-	// Wait until all instances in this test run have signalled.
 	initCtx.MustWaitAllInstancesInitialized(ctx)
+	myIp := initCtx.NetClient.MustGetDataNetworkIP()
 
-	// Find my IP address
-	myIp, err := netclient.GetDataNetworkIP()
-	if err != nil {
-		return err
-	}
-
-	// Start a server
+	// Start a server + ping service
 	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{Port: 1234})
 	if err != nil {
 		return err
@@ -71,9 +65,12 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	defer listener.Close()
 	go server(runenv, listener)
 
+	// Record our listen addrs.
+	runenv.RecordMessage("my listen addrs: %v", myIp)
+
 	// Exhange IPs with the other instances
 	peersTopic := sync.NewTopic("peers", new(net.IP))
-	_ = client.MustPublish(ctx, peersTopic, myIp)
+	client.MustPublish(ctx, peersTopic, myIp)
 
 	peersCh := make(chan net.IP)
 	peers := make([]net.IP, 0, runenv.TestInstanceCount)
@@ -89,10 +86,8 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		}
 	}
 
-	clientReadyState := sync.State("client-ready")
-	clientDoneState := sync.State("client-done")
-
 	// Setting up the client
+	clientReadyState := sync.State("client-ready")
 	client.MustSignalAndWait(ctx, clientReadyState, runenv.TestInstanceCount)
 
 	// Connect to the other peers and keep the conn in a map
@@ -108,13 +103,20 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		25 * time.Millisecond,
 		// 50 * time.Millisecond,
 		// 100 * time.Millisecond,
-		// 200 * time.Millisecond,
+		200 * time.Millisecond,
 	}
+
+	iteration := 0
 
 	for _, latency := range latencies {
 		expectedRTT := latency * 2
+		iteration += 1
 
-		runenv.RecordMessage("RTT: %s", expectedRTT)
+		networkState := sync.State(fmt.Sprintf("network-configured-%d", iteration))
+		doneState := sync.State(fmt.Sprintf("done-%d", iteration))
+		
+		runenv.RecordMessage("⚡️  ITERATION ROUND %d", iteration)
+		runenv.RecordMessage("(round %d) my latency: %s", iteration, latency)
 
 		config := &network.Config{
 			Network: "default",
@@ -122,7 +124,7 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 			Default: network.LinkShape{
 				Latency: latency,
 			},
-			CallbackState:  sync.State("network-configured"),
+			CallbackState:  networkState,
 			CallbackTarget: runenv.TestInstanceCount,
 		}
 
@@ -130,9 +132,10 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 		// Wait for the network to be configured
 		netclient.MustConfigureNetwork(ctx, config)
+		runenv.RecordMessage("Configuration complete, moving on with ping")
 
 		// conns, err := prepareConns(runenv, peers, myIp)
-		time.Sleep(500 * time.Millisecond)
+		// time.Sleep(500 * time.Millisecond)
 
 		// ping pong with the peers
 		err = pingPeers(ctx, runenv, conns, expectedRTT-expectedRTT/5, expectedRTT+expectedRTT/5)
@@ -141,7 +144,7 @@ func verifyRTT(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		}
 
 		// Done with that run (will iterate later)
-		client.MustSignalAndWait(ctx, clientDoneState, runenv.TestInstanceCount)
+		client.MustSignalAndWait(ctx, doneState, runenv.TestInstanceCount)
 		// clearConns(conns)
 	}
 

@@ -1,0 +1,22 @@
+## The manifest file describes a test plan to Testground.
+## Amongst other things, it indicates the name of the test plan, the supported builders and runners, and configurations for those.
+## It describes the test cases, specifying the number of instances and test parameters each supports.
+name = "ping"
+
+[builders]
+"exec:go"   = { enabled = true }
+
+[builders."docker:go"]
+enabled                = true
+build_base_image       = "golang:1.18-buster"
+go_proxy_mode          = "remote"
+go_proxy_url           = "https://proxy.golang.org"
+
+[runners]
+"local:docker"  = { enabled = true }
+"local:exec"    = { enabled = true }
+"cluster:k8s"   = { enabled = true }
+
+[[testcases]]
+name = "issue-1488-latency-not-working-correctly"
+instances = { min = 2, max = 10000, default = 2 }
